@@ -216,13 +216,6 @@ She responds only in poems—professional, analytical, and careful.
 - A **topic-aware ending couplet** is appended (no fixed “Try/Measure”).
 - If the model / key fails, a **deterministic offline poem** appears.
 
-**Privacy**
-- This demo does not store messages server-side.
-- Streamlit may keep session state in memory during your visit only.
-
-**Tip**
-- If outputs feel similar, increase *Creativity* or try a different model.
-"""
     )
 
 # ---------------- Header + Info ----------------
@@ -249,7 +242,8 @@ for i, q in enumerate(suggestions):
         st.session_state.history.append({"role": "user", "content": q})
         poem, backend = generate_poem(q, model, temp, lines)
         st.session_state.history.append({"role": "assistant", "content": f"**Using:** {backend}\n\n{poem}"})
-        st.experimental_rerun()
+                st.rerun()
+
 
 # ---------------- Chat History ----------------
 if "history" not in st.session_state:
