@@ -205,7 +205,7 @@ lines = st.sidebar.slider("Poem length (lines)", 8, 20, 14, 1)
 
 with st.sidebar.expander("ℹ️ About this app", expanded=False):
     st.markdown(
-        """
+    
 **Kelly** is an *AI-Skeptical Poet-Scientist*.  
 She responds only in poems—professional, analytical, and careful.
 
