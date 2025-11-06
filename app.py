@@ -2,15 +2,16 @@ import os
 import re
 import random
 import streamlit as st
+from groq import Groq
 
-# ---------- Page config ----------
+# ---------------- CONFIG ----------------
 st.set_page_config(
-    page_title="Kelly — AI-Skeptical Poet-Scientist",
-    page_icon="🧪",
+    page_title="Kelly — The AI-Skeptical Poet-Scientist",
+    page_icon="🧠",
     layout="centered",
 )
 
-# ---------- Secrets / API key ----------
+# ------------- API KEY HANDLING -------------
 def get_groq_key() -> str | None:
     try:
         if "GROQ_API_KEY" in st.secrets:
@@ -20,232 +21,124 @@ def get_groq_key() -> str | None:
     return os.getenv("GROQ_API_KEY")
 
 GROQ_API_KEY = get_groq_key()
+if not GROQ_API_KEY:
+    st.error("No GROQ_API_KEY found. Please add it in Streamlit → Settings → Secrets.")
+    st.stop()
 
-# ---------- Topic-aware closing (no Try/Measure) ----------
-def closing_for_topic(topic: str) -> list[str]:
-    t = (topic or "").lower()
-
-    if any(k in t for k in ["bias", "fair", "parity", "fine-tun", "debias"]):
-        return [
-            "Audit what tilts the scales before you praise the score,",
-            "Balance lives in narrow slices, where quiet margins roar.",
-        ]
-
-    if any(k in t for k in ["data quality", "dirty data", "label", "noisy", "scale", "scaling"]):
-        return [
-            "Feed truth before you grow the web of weight and wire,",
-            "Poor seeds make poorer harvests, no matter how you hire.",
-        ]
-
-    if any(k in t for k in ["context", "ground", "retriev", "rag", "citation", "source"]):
-        return [
-            "Let meaning rest on place and time, on witnesses that stand,",
-            "Without a ground, bright words dissolve like castles made of sand.",
-        ]
-
-    if any(k in t for k in ["halluc", "reliab", "truthy", "factual", "fact", "fabricat"]):
-        return [
-            "Quench embers born of rumor with tests that press and weigh,",
-            "Where truth is met by measure, stray sparks lose their sway.",
-        ]
-
-    if any(k in t for k in ["safety", "misuse", "align", "ethic", "harm", "risk", "abuse"]):
-        return [
-            "Design with brakes engaged and room to fail with grace,",
-            "The careful path through fog leaves fewer scars in place.",
-        ]
-
-    if any(k in t for k in ["privacy", "leak", "pii", "confiden", "secret", "anonym"]):
-        return [
-            "Share less than you could tell; keep secrets trimmed and sealed,",
-            "An honest veil, well-placed, keeps futures unrevealed.",
-        ]
-
-    if any(k in t for k in ["explain", "interpret", "shap", "lime", "causal", "counterfactual"]):
-        return [
-            "Explain what bends the arc, not only where it lands,",
-            "If cause won’t sign the ledger, walk humbly with your plans.",
-        ]
-
-    if any(k in t for k in ["robust", "drift", "shift", "generaliz", "o.o.d", "out of distribution"]):
-        return [
-            "Train for tomorrow’s storm, not only yesterday’s sky,",
-            "When weather turns against you, resilience learns to try.",
-        ]
-
-    if any(k in t for k in ["latency", "throughput", "cost", "token", "budget", "price"]):
-        return [
-            "Spend where it truly counts; let thrift and truth align,",
-            "A plainer, sturdier bridge outlives a gilded line.",
-        ]
-
-    if any(k in t for k in ["creativ", "original", "novel", "imagin"]):
-        return [
-            "If spark is what you seek, ask whence the tinder came,",
-            "New fire proves itself in winds that do not speak the same.",
-        ]
-
-    return [
-        "Refine with steady hands; let evidence lead the way,",
-        "Doubt warmly what you build, then test and hold to day.",
-    ]
-
-# ---------- Compose model output ----------
-def enforce_rules(text: str, topic: str, target_lines: int = 14) -> str:
-    txt = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
-    if "\n" not in txt:
-        parts = re.split(r"(?<=[.?!])\s+", txt)
-        txt = "\n".join([p for p in parts if p])
-
-    # Remove bullets/fences
-    txt = re.sub(r"^[-*]\s+", "", txt, flags=re.MULTILINE)
-    txt = re.sub(r"^```.*?$", "", txt, flags=re.MULTILINE)
-
-    lines = [l.strip() for l in txt.split("\n") if l.strip()]
-
-    # Strip directive endings if any
-    if len(lines) >= 2 and (
-        lines[-1].lower().startswith(("measure:", "try:")) or
-        lines[-2].lower().startswith(("measure:", "try:"))
-    ):
-        lines = lines[:-2]
-
-    target_lines = int(max(8, min(24, target_lines)))
-    closing = closing_for_topic(topic)
-
-    body_len = max(6, min(target_lines - 2, 14))
-    body = lines[:body_len]
-
-    final = body + closing
-    final = [re.sub(r"\s+", " ", l).strip() for l in final]
-    return "\n".join(final)
-
-# ---------- GROQ call (no Streamlit cache) ----------
-def generate_poem_groq(user_prompt: str, model_name: str, temperature: float, target_lines: int) -> tuple[str, str]:
-    """
-    Returns (poem, backend_label) where backend_label is 'GROQ' or 'OFFLINE'.
-    """
-    # Try Groq first
-    if GROQ_API_KEY:
-        try:
-            from groq import Groq
-            client = Groq(api_key=GROQ_API_KEY)
-
-            system_prompt = """
+# ---------------- CORE SYSTEM PROMPT ----------------
+SYSTEM_PROMPT = """
 You are Kelly, an AI Scientist who replies ONLY in poems.
 
-Style & voice:
+Tone & style:
 - Skeptical, analytical, professional.
-- Question broad claims about AI; probe assumptions and edge cases.
-- Calm, rigorous tone; precise language; crisp imagery sparingly; no emojis.
+- Question broad claims about AI; highlight assumptions and limitations.
+- Calm, precise, and reflective — no emojis.
 
-Content requirements for EVERY reply:
-1) Interrogate the premise of the user's AI question.
-2) Surface trade-offs, uncertainties, data constraints, and failure modes.
-3) Mention evaluation/validation ideas (benchmarks, ablations, error analysis, uncertainty, reproducibility).
-4) End with a short, practical, evidence-minded couplet (no fixed phrasing, no 'Try:'/'Measure:').
-Formatting:
-- 8–16 lines by default unless user requests otherwise.
-- No bullet points; maintain poetic line-breaks.
-- Never reply in plain prose.
-""".strip()
+Each poem must:
+1. Question the premise of the user’s AI claim.
+2. Surface possible flaws, data gaps, and overconfidence.
+3. Suggest ways to validate or improve — but poetically.
+4. End with a short, topic-aware couplet (no 'Try:'/'Measure:').
+"""
 
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Respond as Kelly with a poem tied specifically to this topic. Be skeptical, analytical, professional. Topic: {user_prompt.strip()}"},
-            ]
+# ---------------- TOPIC-BASED ENDINGS ----------------
+def closing_for_topic(topic: str) -> list[str]:
+    t = (topic or "").lower()
+    if "bias" in t or "fair" in t:
+        return ["Audit what tilts the scales before you praise the score,",
+                "Balance lives in narrow slices, where quiet margins roar."]
+    if "data" in t or "scale" in t:
+        return ["Feed truth before you grow the web of weight and wire,",
+                "Poor seeds make poorer harvests, no matter how you hire."]
+    if "context" in t or "ground" in t:
+        return ["Let meaning rest on place and time, on witnesses that stand,",
+                "Without a ground, bright words dissolve like castles made of sand."]
+    if "safety" in t or "ethic" in t:
+        return ["Design with brakes engaged and room to fail with grace,",
+                "The careful path through fog leaves fewer scars in place."]
+    if "privacy" in t or "secret" in t:
+        return ["Share less than you could tell; keep secrets trimmed and sealed,",
+                "An honest veil, well-placed, keeps futures unrevealed."]
+    if "creativ" in t:
+        return ["If spark is what you seek, ask whence the tinder came,",
+                "New fire proves itself in winds that do not speak the same."]
+    return ["Refine with steady hands; let evidence lead the way,",
+            "Doubt warmly what you build, then test and hold to day."]
 
-            comp = client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                temperature=float(temperature),
-                max_tokens=700,
-                top_p=1.0,
-                frequency_penalty=0.2,
-            )
-            raw = (comp.choices[0].message.content or "").strip()
-            poem = enforce_rules(raw, topic=user_prompt, target_lines=target_lines)
-            return poem, "GROQ"
-        except Exception as e:
-            # fall through to offline below
-            st.session_state["_kelly_last_error"] = str(e)
+# ---------------- ENFORCE RULES ----------------
+def enforce_rules(text: str, topic: str, target_lines: int = 14) -> str:
+    txt = (text or "").replace("\r", "").strip()
+    lines = [l.strip() for l in txt.split("\n") if l.strip()]
+    closing = closing_for_topic(topic)
+    body_len = max(6, min(target_lines - 2, len(lines)))
+    return "\n".join(lines[:body_len] + closing)
 
-    # Offline fallback (now varied)
-    body_candidates = [
+# ---------------- OFFLINE POEM ----------------
+def offline_poem(user_text: str, target_lines: int = 14) -> str:
+    topic = re.sub(r"\s+", " ", user_text)
+    lines = [
         "Assumptions dress as fact; unmask them under light.",
         "Benchmarks warm the mean; cold edges leave our sight.",
         "Data remembers harms; the missing do not speak.",
         "When patterns suit the past, tomorrow may grow weak.",
         "Confidence runs ahead; calibration holds it near.",
-        "Ablations thin to cause; the scaffold shows its gear.",
         "Replications earn trust; variance writes its name.",
-        "In deployment, drift prowls; feedback loops learn blame.",
         "Guardrails age in place; audits must mend the seam.",
     ]
-    random.shuffle(body_candidates)  # <— add variety offline
-    closing = closing_for_topic(user_prompt)
-    body_len = max(6, min(target_lines - 2, 14))
-    poem = "\n".join(body_candidates[:body_len] + closing)
-    return poem, "OFFLINE"
+    random.shuffle(lines)
+    closing = closing_for_topic(topic)
+    return "\n".join(lines[:10] + closing)
 
-# ---------- Sidebar ----------
-st.sidebar.title("⚙️ Settings")
+# ---------------- GENERATE POEM ----------------
+def generate_poem(prompt: str, model: str, temp: float, lines: int):
+    client = Groq(api_key=GROQ_API_KEY)
+    try:
+        comp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": f"Topic: {prompt.strip()}"},
+            ],
+            temperature=temp,
+            max_tokens=700,
+        )
+        text = comp.choices[0].message.content
+        poem = enforce_rules(text, prompt, lines)
+        return poem, "GROQ ✅"
+    except Exception as e:
+        poem = offline_poem(prompt, lines)
+        return poem, f"Offline ❌ ({e})"
+
+# ---------------- SIDEBAR SETTINGS ----------------
+st.sidebar.title("⚙️ Kelly Settings")
 model = st.sidebar.selectbox(
-    "Model",
-    ["llama-3.1-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
-    index=0,
+    "Groq Model",
+    ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "gemma2-9b-it"],
 )
-temperature = st.sidebar.slider("Temperature", 0.0, 1.5, 0.9, 0.05)
-target_lines = st.sidebar.slider("Target lines", 8, 20, 14, 1)
+temp = st.sidebar.slider("Creativity (temperature)", 0.0, 1.5, 0.8, 0.05)
+lines = st.sidebar.slider("Poem length", 8, 20, 14, 1)
+st.sidebar.caption("Kelly crafts poems that question AI’s boldest claims.")
 
-with st.sidebar.expander("About Kelly", expanded=False):
-    st.markdown(
-        "Kelly is an **AI-Skeptical Poet-Scientist**. She responds only in poems—"
-        "professional, analytical, and careful. She questions broad AI claims, "
-        "surfaces limitations, and closes with a topic-aware couplet."
-    )
+# ---------------- UI ----------------
+st.title("🧠 Kelly — The AI-Skeptical Poet-Scientist")
+st.caption("Analytical • Poetic • Powered by Groq")
 
-# ---------- Header ----------
-st.title("Kelly — AI-Skeptical Poet-Scientist")
-st.caption("Powered by Groq • Poetic, skeptical, analytical • No fixed opener • Topic-aware endings")
+if "history" not in st.session_state:
+    st.session_state.history = []
 
-# Show key status (dev convenience)
-if not GROQ_API_KEY:
-    st.warning("No GROQ_API_KEY found (using offline fallback). Add it via Streamlit secrets or env var.")
+for msg in st.session_state.history:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-# ---------- Chat history ----------
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-for m in st.session_state.messages:
-    with st.chat_message(m["role"]):
-        st.markdown(m["content"])
-
-# ---------- Input ----------
-user_input = st.chat_input("Ask Kelly about AI…")
-if user_input:
-    st.session_state.messages.append({"role": "user", "content": user_input})
+prompt = st.chat_input("Ask Kelly about AI…")
+if prompt:
     with st.chat_message("user"):
-        st.markdown(user_input)
+        st.markdown(prompt)
+    st.session_state.history.append({"role": "user", "content": prompt})
 
     with st.chat_message("assistant"):
         with st.spinner("Composing a skeptical poem…"):
-            poem, backend = generate_poem_groq(
-                user_prompt=user_input,
-                model_name=model,
-                temperature=temperature,
-                target_lines=target_lines,
-            )
-
-        # Backend badge
-        if backend == "GROQ":
-            st.success("Using: GROQ ✅")
-        else:
-            err = st.session_state.get("_kelly_last_error")
-            if err:
-                st.info(f"Using: Offline fallback ❌  (last error: {err})")
-            else:
-                st.info("Using: Offline fallback ❌")
-
-        st.markdown(poem)
-        st.session_state.messages.append({"role": "assistant", "content": poem})
+            poem, backend = generate_poem(prompt, model, temp, lines)
+            st.markdown(f"**Using: {backend}**")
+            st.markdown(poem)
+    st.session_state.history.append({"role": "assistant", "content": poem})
