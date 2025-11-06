@@ -1,0 +1,14 @@
+# Secrets
+.env
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.vscode/
+
+# Local data
+kelly_cache.sqlite
+kelly_cache.sqlite-journal
