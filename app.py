@@ -26,7 +26,7 @@ GROQ_API_KEY = get_groq_key()
 
 # Current/active Groq model names (rotate if one is decommissioned)
 GROQ_MODELS_ORDER = [
-    "llama-3.3-70b-versatile",  # primary (as of late 2025)
+    "llama-3.3-70b-versatile",  # primary
     "llama-3.1-8b-instant",     # fast/cheap fallback
     "gemma2-9b-it"              # lightweight alt
 ]
@@ -60,7 +60,7 @@ def closing_for_topic(topic: str) -> list[str]:
             "Feed truth before you grow the web of weight and wire,",
             "Poor seeds make poorer harvests, no matter how you hire.",
         ]
-    if "context" in t or "ground" in t or "rag" in t or "citation" in t:
+    if "context" in t or "ground" in t or "rag" in t or "citation" in t or "source" in t:
         return [
             "Let meaning rest on place and time, on witnesses that stand,",
             "Without a ground, bright words dissolve like castles made of sand.",
@@ -90,7 +90,7 @@ def closing_for_topic(topic: str) -> list[str]:
             "Train for tomorrow’s storm, not only yesterday’s sky,",
             "When weather turns against you, resilience learns to try.",
         ]
-    if "latency" in t or "throughput" in t or "cost" in t or "budget" in t:
+    if "latency" in t or "throughput" in t or "cost" in t or "budget" in t or "price" in t:
         return [
             "Spend where it truly counts; let thrift and truth align,",
             "A plainer, sturdier bridge outlives a gilded line.",
@@ -107,23 +107,19 @@ def closing_for_topic(topic: str) -> list[str]:
 
 # ---------------- ENFORCE RULES ----------------
 def enforce_rules(text: str, topic: str, target_lines: int = 14) -> str:
-    """Format the model's text as a Kelly-style poem:
-    - natural opening (no fixed phrase),
-    - topic-aware closing couplet (no 'Try:'/'Measure:'),
-    - controlled length (default 8–16).
-    """
+    """Format raw model text as a Kelly-style poem."""
     txt = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if "\n" not in txt:
         parts = re.split(r"(?<=[.?!])\s+", txt)
         txt = "\n".join([p for p in parts if p])
 
-    # Clean bullets/fences if any
+    # Clean bullets/fences
     txt = re.sub(r"^[-*]\s+", "", txt, flags=re.MULTILINE)
     txt = re.sub(r"^```.*?$", "", txt, flags=re.MULTILINE)
 
     lines = [l.strip() for l in txt.split("\n") if l.strip()]
 
-    # Remove any old directive endings if the model sneaks them in
+    # Strip directive endings if any
     if len(lines) >= 2 and (
         lines[-1].lower().startswith(("measure:", "try:")) or
         lines[-2].lower().startswith(("measure:", "try:"))
@@ -162,11 +158,9 @@ def offline_poem(user_text: str, target_lines: int = 14) -> str:
 # ---------------- GROQ CALL with AUTO-MODEL FALLBACK ----------------
 def generate_poem(prompt: str, chosen_model: str, temp: float, lines: int):
     if not GROQ_API_KEY:
-        return offline_poem(prompt, lines), "Offline  (missing GROQ_API_KEY)"
+        return offline_poem(prompt, lines), "Offline ❌ (missing GROQ_API_KEY)"
 
     client = Groq(api_key=GROQ_API_KEY)
-
-    # Try the selected model first, then rotate through known-good models
     model_candidates = [chosen_model] + [m for m in GROQ_MODELS_ORDER if m != chosen_model]
 
     last_err = None
@@ -183,16 +177,15 @@ def generate_poem(prompt: str, chosen_model: str, temp: float, lines: int):
             )
             raw = (comp.choices[0].message.content or "").strip()
             poem = enforce_rules(raw, prompt, lines)
-            return poem, f" ({model})"
+            return poem, f"GROQ ✅ ({model})"
         except Exception as e:
             last_err = e
             continue
 
-    # If all candidates failed → offline poem
     poem = offline_poem(prompt, lines)
-    return poem, f"Offline  ({last_err})"
+    return poem, f"Offline ❌ ({last_err})"
 
-# ---------------- SIDEBAR: Settings + About ----------------
+# ---------------- SIDEBAR ----------------
 st.sidebar.title("⚙️ Settings")
 model = st.sidebar.selectbox(
     "Groq Model",
@@ -205,53 +198,65 @@ lines = st.sidebar.slider("Poem length (lines)", 8, 20, 14, 1)
 
 with st.sidebar.expander("ℹ️ About this app", expanded=False):
     st.markdown(
-    
+        """
 **Kelly** is an *AI-Skeptical Poet-Scientist*.  
 She responds only in poems—professional, analytical, and careful.
 
 **How it works**
 - Your question is sent to Groq’s LLM via API.
-- A system prompt sets Kelly’s voice and rules (skeptical + poetic).
-- The raw model text is cleaned and shaped into a poem.
-- A **topic-aware ending couplet** is appended (no fixed “Try/Measure”).
-- If the model / key fails, a **deterministic offline poem** appears.
+- A system prompt sets Kelly’s voice and constraints.
+- The output is cleaned and shaped into a poem.
+- A **topic-aware ending couplet** is added.
+- If the API fails, a **deterministic offline poem** is shown.
 
+**Privacy**
+- This demo stores conversation only in your session state (RAM) during your visit.
+"""
     )
 
 # ---------------- Header + Info ----------------
 st.title("🧪 Kelly — The AI-Skeptical Poet-Scientist")
 st.caption("Analytical • Poetic • Powered by Groq • No fixed opener • Topic-aware endings")
-
 st.info(
     "Ask about **AI bias, safety, data quality, robustness, explainability, creativity, scaling,** "
     "or anything where scientific skepticism matters."
 )
 
-# ---------------- Quick Starters ----------------
+# ---------------- Quick Starters (no rerun needed) ----------------
 suggestions = [
     "Are AI ethics guidelines enough to stop bias?",
     "What happens when we scale models without scaling data quality?",
     "Can AI truly understand context?",
     "Why do models hallucinate even with retrieval?",
-    "Can fairness be engineered, or only pursued?"
+    "Can fairness be engineered, or only pursued?",
+    "Can AI write poetry that doubts its own syntax?"
 ]
 cols = st.columns(min(3, len(suggestions)))
+selected_q = None
 for i, q in enumerate(suggestions):
-    if cols[i % len(cols)].button(q):
-        st.session_state.setdefault("history", [])
-        st.session_state.history.append({"role": "user", "content": q})
-        poem, backend = generate_poem(q, model, temp, lines)
-        st.session_state.history.append({"role": "assistant", "content": f"**Using:** {backend}\n\n{poem}"})
-                st.rerun()
+    if cols[i % len(cols)].button(q, key=f"sugg_{i}"):
+        selected_q = q
 
-
-# ---------------- Chat History ----------------
+# ---------------- Session state ----------------
 if "history" not in st.session_state:
     st.session_state.history = []
 
+# Render history
 for msg in st.session_state.history:
-    with st.chat_message("user" if msg["role"] == "user" else "assistant"):
+    with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
+
+# Process a starter question immediately (no rerun)
+if selected_q:
+    st.session_state.history.append({"role": "user", "content": selected_q})
+    with st.chat_message("user"):
+        st.markdown(selected_q)
+    with st.chat_message("assistant"):
+        with st.spinner("Composing a skeptical poem…"):
+            poem, backend = generate_poem(selected_q, model, temp, lines)
+            st.markdown(f"**Using:** {backend}")
+            st.markdown(poem)
+    st.session_state.history.append({"role": "assistant", "content": f"**Using:** {backend}\n\n{poem}"})
 
 # ---------------- Chat Input ----------------
 prompt = st.chat_input("Ask Kelly about AI…")
@@ -259,11 +264,9 @@ if prompt:
     st.session_state.history.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
-
     with st.chat_message("assistant"):
         with st.spinner("Composing a skeptical poem…"):
             poem, backend = generate_poem(prompt, model, temp, lines)
             st.markdown(f"**Using:** {backend}")
             st.markdown(poem)
-
-    st.session_state.history.append({"role": "assistant", "content": poem})
+    st.session_state.history.append({"role": "assistant", "content": f"**Using:** {backend}\n\n{poem}"})
