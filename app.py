@@ -1,28 +1,27 @@
 import os
 import re
+import random
 import streamlit as st
 
-# ---------- Config UI ----------
+# ---------- Page config ----------
 st.set_page_config(
     page_title="Kelly — AI-Skeptical Poet-Scientist",
     page_icon="🧪",
     layout="centered",
 )
 
-# ---------- Secrets / API key discovery ----------
+# ---------- Secrets / API key ----------
 def get_groq_key() -> str | None:
-    # Prefer Streamlit secrets (works in Streamlit Cloud)
     try:
         if "GROQ_API_KEY" in st.secrets:
             return st.secrets["GROQ_API_KEY"]
     except Exception:
         pass
-    # Fallback to environment variable (works locally or with dotenv)
     return os.getenv("GROQ_API_KEY")
 
 GROQ_API_KEY = get_groq_key()
 
-# ---------- Topic-aware poetic closings (no 'Try:'/'Measure:') ----------
+# ---------- Topic-aware closing (no Try/Measure) ----------
 def closing_for_topic(topic: str) -> list[str]:
     t = (topic or "").lower()
 
@@ -91,13 +90,8 @@ def closing_for_topic(topic: str) -> list[str]:
         "Doubt warmly what you build, then test and hold to day.",
     ]
 
-# ---------- Compose model output into final poem ----------
+# ---------- Compose model output ----------
 def enforce_rules(text: str, topic: str, target_lines: int = 14) -> str:
-    """Format the model's text as a Kelly-style poem:
-    - natural opening (no fixed phrase),
-    - topic-aware closing couplet (no 'Try:'/'Measure:'),
-    - controlled length (default 8–16).
-    """
     txt = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if "\n" not in txt:
         parts = re.split(r"(?<=[.?!])\s+", txt)
@@ -126,13 +120,18 @@ def enforce_rules(text: str, topic: str, target_lines: int = 14) -> str:
     final = [re.sub(r"\s+", " ", l).strip() for l in final]
     return "\n".join(final)
 
-# ---------- Groq call ----------
-@st.cache_data(show_spinner=False)
-def generate_poem_groq(user_prompt: str, model_name: str, temperature: float, target_lines: int) -> str:
-    from groq import Groq
-    client = Groq(api_key=GROQ_API_KEY)
+# ---------- GROQ call (no Streamlit cache) ----------
+def generate_poem_groq(user_prompt: str, model_name: str, temperature: float, target_lines: int) -> tuple[str, str]:
+    """
+    Returns (poem, backend_label) where backend_label is 'GROQ' or 'OFFLINE'.
+    """
+    # Try Groq first
+    if GROQ_API_KEY:
+        try:
+            from groq import Groq
+            client = Groq(api_key=GROQ_API_KEY)
 
-    system_prompt = """
+            system_prompt = """
 You are Kelly, an AI Scientist who replies ONLY in poems.
 
 Style & voice:
@@ -151,21 +150,43 @@ Formatting:
 - Never reply in plain prose.
 """.strip()
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"Respond as Kelly with a poem tied specifically to this topic. Be skeptical, analytical, professional. Topic: {user_prompt.strip()}"},
-    ]
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Respond as Kelly with a poem tied specifically to this topic. Be skeptical, analytical, professional. Topic: {user_prompt.strip()}"},
+            ]
 
-    comp = client.chat.completions.create(
-        model=model_name,
-        messages=messages,
-        temperature=float(temperature),
-        max_tokens=700,
-        top_p=1.0,
-        frequency_penalty=0.2,
-    )
-    raw = (comp.choices[0].message.content or "").strip()
-    return enforce_rules(raw, topic=user_prompt, target_lines=target_lines)
+            comp = client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                temperature=float(temperature),
+                max_tokens=700,
+                top_p=1.0,
+                frequency_penalty=0.2,
+            )
+            raw = (comp.choices[0].message.content or "").strip()
+            poem = enforce_rules(raw, topic=user_prompt, target_lines=target_lines)
+            return poem, "GROQ"
+        except Exception as e:
+            # fall through to offline below
+            st.session_state["_kelly_last_error"] = str(e)
+
+    # Offline fallback (now varied)
+    body_candidates = [
+        "Assumptions dress as fact; unmask them under light.",
+        "Benchmarks warm the mean; cold edges leave our sight.",
+        "Data remembers harms; the missing do not speak.",
+        "When patterns suit the past, tomorrow may grow weak.",
+        "Confidence runs ahead; calibration holds it near.",
+        "Ablations thin to cause; the scaffold shows its gear.",
+        "Replications earn trust; variance writes its name.",
+        "In deployment, drift prowls; feedback loops learn blame.",
+        "Guardrails age in place; audits must mend the seam.",
+    ]
+    random.shuffle(body_candidates)  # <— add variety offline
+    closing = closing_for_topic(user_prompt)
+    body_len = max(6, min(target_lines - 2, 14))
+    poem = "\n".join(body_candidates[:body_len] + closing)
+    return poem, "OFFLINE"
 
 # ---------- Sidebar ----------
 st.sidebar.title("⚙️ Settings")
@@ -174,33 +195,28 @@ model = st.sidebar.selectbox(
     ["llama-3.1-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
     index=0,
 )
-temperature = st.sidebar.slider("Temperature", 0.0, 1.5, 0.8, 0.05)
+temperature = st.sidebar.slider("Temperature", 0.0, 1.5, 0.9, 0.05)
 target_lines = st.sidebar.slider("Target lines", 8, 20, 14, 1)
 
 with st.sidebar.expander("About Kelly", expanded=False):
     st.markdown(
-        "Kelly is an **AI-Skeptical Poet-Scientist**. "
-        "She responds only in poems—professional, analytical, and careful. "
-        "She questions broad AI claims, surfaces limitations, and closes with a topic-aware couplet."
+        "Kelly is an **AI-Skeptical Poet-Scientist**. She responds only in poems—"
+        "professional, analytical, and careful. She questions broad AI claims, "
+        "surfaces limitations, and closes with a topic-aware couplet."
     )
 
 # ---------- Header ----------
 st.title("Kelly — AI-Skeptical Poet-Scientist")
 st.caption("Powered by Groq • Poetic, skeptical, analytical • No fixed opener • Topic-aware endings")
 
-# ---------- Check key ----------
+# Show key status (dev convenience)
 if not GROQ_API_KEY:
-    st.error(
-        "No API key found. Set your key either in **.streamlit/secrets.toml** as `GROQ_API_KEY` "
-        "or as an environment variable `GROQ_API_KEY`."
-    )
-    st.stop()
+    st.warning("No GROQ_API_KEY found (using offline fallback). Add it via Streamlit secrets or env var.")
 
 # ---------- Chat history ----------
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Render history
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
@@ -208,37 +224,28 @@ for m in st.session_state.messages:
 # ---------- Input ----------
 user_input = st.chat_input("Ask Kelly about AI…")
 if user_input:
-    # Show user bubble
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    # Generate Kelly’s poem
     with st.chat_message("assistant"):
         with st.spinner("Composing a skeptical poem…"):
-            try:
-                poem = generate_poem_groq(
-                    user_prompt=user_input,
-                    model_name=model,
-                    temperature=temperature,
-                    target_lines=target_lines,
-                )
-            except Exception as e:
-                # Offline-style deterministic poem if API fails
-                body_candidates = [
-                    "Assumptions dress as fact; unmask them under light.",
-                    "Benchmarks warm the mean; cold edges leave our sight.",
-                    "Data remembers harms; the missing do not speak.",
-                    "When patterns suit the past, tomorrow may grow weak.",
-                    "Confidence runs ahead; calibration holds it near.",
-                    "Ablations thin to cause; the scaffold shows its gear.",
-                    "Replications earn trust; variance writes its name.",
-                    "In deployment, drift prowls; feedback loops learn blame.",
-                    "Guardrails age in place; audits must mend the seam.",
-                ]
-                closing = closing_for_topic(user_input)
-                body_len = max(6, min(target_lines - 2, 14))
-                poem = "\n".join(body_candidates[:body_len] + closing)
+            poem, backend = generate_poem_groq(
+                user_prompt=user_input,
+                model_name=model,
+                temperature=temperature,
+                target_lines=target_lines,
+            )
 
-            st.markdown(poem)
-            st.session_state.messages.append({"role": "assistant", "content": poem})
+        # Backend badge
+        if backend == "GROQ":
+            st.success("Using: GROQ ✅")
+        else:
+            err = st.session_state.get("_kelly_last_error")
+            if err:
+                st.info(f"Using: Offline fallback ❌  (last error: {err})")
+            else:
+                st.info("Using: Offline fallback ❌")
+
+        st.markdown(poem)
+        st.session_state.messages.append({"role": "assistant", "content": poem})
